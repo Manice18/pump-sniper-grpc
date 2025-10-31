@@ -105,7 +105,7 @@ Note: The transaction is not sent to the network. You’ll see logs, the estimat
 
 ### Some Terminal Screenshots:
 
-<img src="./1.png"></img>
-<img src="./2.png"></img>
-<img src="./3.png"></img>
-<img src="./4.png"></img>
+<img src="./images/1.png"></img>
+<img src="./images/2.png"></img>
+<img src="./images/3.png"></img>
+<img src="./images/4.png"></img>
