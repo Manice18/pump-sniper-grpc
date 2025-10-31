@@ -114,11 +114,15 @@ fn build_buy_instruction(
         AccountMeta::new_readonly(accounts.fee_program, false),
     ];
 
-    // Build instruction data: discriminator + amount + max_sol_cost
+    // Build instruction data: discriminator + amount + max_sol_cost + track_volume (OptionBool)
+    // OptionBool: Some(bool) = [1, 0] for false, [1, 1] for true, None = [0]
     let mut data = Vec::new();
     data.extend_from_slice(&BUY_DISCRIMINATOR);
     data.extend_from_slice(&amount_tokens_out.to_le_bytes());
     data.extend_from_slice(&max_sol_cost.to_le_bytes());
+    // OptionBool::Some(false) = [1, 0]
+    data.push(1); // Some
+    data.push(0); // false
 
     Instruction {
         program_id: pump_program,
@@ -269,8 +273,17 @@ pub fn build_buy_transaction(
         fee_recipient,
     };
 
+    // Add fee buffer (2%) to max_sol_cost to account for protocol fees, creator fees, etc.
+    // The program needs ~0.89% more, so 2% should be safe
+    let fee_buffer = (amount_lamports as f64 * 0.02) as u64;
+    let max_sol_cost_with_fees = amount_lamports + fee_buffer;
+
+    println!("   💰 SOL Budget: {} lamports", amount_lamports);
+    println!("   💰 Fee Buffer (2%): {} lamports", fee_buffer);
+    println!("   💰 Max SOL Cost: {} lamports", max_sol_cost_with_fees);
+
     // Add the buy instruction matching IDL order
-    let buy_ix = build_buy_instruction(&accounts, min_tokens_out, amount_lamports);
+    let buy_ix = build_buy_instruction(&accounts, min_tokens_out, max_sol_cost_with_fees);
     instructions.push(buy_ix);
 
     // Get recent blockhash
@@ -313,7 +326,7 @@ pub fn simulate_buy_transaction(
             println!("   ✅ Simulation successful!");
             if let Some(logs) = response.value.logs {
                 println!("   Logs:");
-                for log in logs.iter().take(10) {
+                for log in logs.iter() {
                     println!("      {}", log);
                 }
             }
