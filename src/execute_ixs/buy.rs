@@ -14,11 +14,9 @@ use spl_associated_token_account::get_associated_token_address;
 
 const PUMP_PROGRAM: &str = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const PUMP_GLOBAL: &str = "4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf";
-const PUMP_FEE: &str = "CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM";
-const PUMP_EVENT_AUTHORITY: &str = "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1";
 const TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
-const RENT: &str = "SysvarRent111111111111111111111111111111111";
+const FEE_PROGRAM: &str = "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ";
 
 // Buy instruction discriminator
 const BUY_DISCRIMINATOR: [u8; 8] = [102, 6, 61, 18, 1, 218, 235, 234];
@@ -27,6 +25,7 @@ pub struct BuyParams {
     pub mint: String,
     pub bonding_curve: String,
     pub associated_bonding_curve: String,
+    pub creator: String,
     pub amount_sol: f64,
     pub slippage_bps: u64, // basis points (e.g., 500 = 5%)
     pub buyer_keypair: Keypair,
@@ -61,48 +60,88 @@ fn calculate_tokens_with_slippage(
 
 /// Build a buy instruction for pump.fun
 fn build_buy_instruction(
-    buyer: &Pubkey,
-    mint: &Pubkey,
-    bonding_curve: &Pubkey,
-    associated_bonding_curve: &Pubkey,
-    buyer_token_account: &Pubkey,
-    amount_sol: u64,
+    accounts: &BuyAccounts,
+    amount_tokens_out: u64,
     max_sol_cost: u64,
 ) -> Instruction {
     let global = Pubkey::from_str(PUMP_GLOBAL).unwrap();
-    let fee_recipient = Pubkey::from_str(PUMP_FEE).unwrap();
-    let event_authority = Pubkey::from_str(PUMP_EVENT_AUTHORITY).unwrap();
-    let token_program = Pubkey::from_str(TOKEN_PROGRAM).unwrap();
-    let system_program = Pubkey::from_str(SYSTEM_PROGRAM).unwrap();
-    let rent = Pubkey::from_str(RENT).unwrap();
     let pump_program = Pubkey::from_str(PUMP_PROGRAM).unwrap();
 
-    let accounts = vec![
+    let metas = vec![
         AccountMeta::new(global, false),
-        AccountMeta::new(fee_recipient, false),
-        AccountMeta::new(*mint, false),
-        AccountMeta::new(*bonding_curve, false),
-        AccountMeta::new(*associated_bonding_curve, false),
-        AccountMeta::new(*buyer_token_account, false),
-        AccountMeta::new(*buyer, true), // Signer
-        AccountMeta::new_readonly(system_program, false),
-        AccountMeta::new_readonly(token_program, false),
-        AccountMeta::new_readonly(rent, false),
-        AccountMeta::new_readonly(event_authority, false),
+        AccountMeta {
+            pubkey: accounts.fee_recipient,
+            is_signer: false,
+            is_writable: true,
+        },
+        AccountMeta::new_readonly(accounts.mint, false),
+        AccountMeta {
+            pubkey: accounts.bonding_curve,
+            is_signer: false,
+            is_writable: true,
+        },
+        AccountMeta {
+            pubkey: accounts.associated_bonding_curve,
+            is_signer: false,
+            is_writable: true,
+        },
+        AccountMeta {
+            pubkey: accounts.associated_user,
+            is_signer: false,
+            is_writable: true,
+        },
+        AccountMeta::new(accounts.user, true),
+        AccountMeta::new_readonly(accounts.system_program, false),
+        AccountMeta::new_readonly(accounts.token_program, false),
+        AccountMeta {
+            pubkey: accounts.creator_vault,
+            is_signer: false,
+            is_writable: true,
+        },
+        AccountMeta::new_readonly(accounts.event_authority, false),
         AccountMeta::new_readonly(pump_program, false),
+        AccountMeta {
+            pubkey: accounts.global_volume_accumulator,
+            is_signer: false,
+            is_writable: true,
+        },
+        AccountMeta {
+            pubkey: accounts.user_volume_accumulator,
+            is_signer: false,
+            is_writable: true,
+        },
+        AccountMeta::new(accounts.fee_config, false),
+        AccountMeta::new_readonly(accounts.fee_program, false),
     ];
 
     // Build instruction data: discriminator + amount + max_sol_cost
     let mut data = Vec::new();
     data.extend_from_slice(&BUY_DISCRIMINATOR);
-    data.extend_from_slice(&amount_sol.to_le_bytes());
+    data.extend_from_slice(&amount_tokens_out.to_le_bytes());
     data.extend_from_slice(&max_sol_cost.to_le_bytes());
 
     Instruction {
         program_id: pump_program,
-        accounts,
+        accounts: metas,
         data,
     }
+}
+
+struct BuyAccounts {
+    mint: Pubkey,
+    bonding_curve: Pubkey,
+    associated_bonding_curve: Pubkey,
+    associated_user: Pubkey,
+    user: Pubkey,
+    system_program: Pubkey,
+    token_program: Pubkey,
+    creator_vault: Pubkey,
+    event_authority: Pubkey,
+    global_volume_accumulator: Pubkey,
+    user_volume_accumulator: Pubkey,
+    fee_config: Pubkey,
+    fee_program: Pubkey,
+    fee_recipient: Pubkey,
 }
 
 /// Build a complete buy transaction with compute budget
@@ -116,6 +155,7 @@ pub fn build_buy_transaction(
     let mint = Pubkey::from_str(&params.mint)?;
     let bonding_curve = Pubkey::from_str(&params.bonding_curve)?;
     let associated_bonding_curve = Pubkey::from_str(&params.associated_bonding_curve)?;
+    let creator = Pubkey::from_str(&params.creator)?;
 
     // Get buyer's associated token account
     let buyer_token_account = get_associated_token_address(&buyer, &mint);
@@ -167,16 +207,70 @@ pub fn build_buy_transaction(
         }
     }
 
-    // Add the buy instruction
-    let buy_ix = build_buy_instruction(
-        &buyer,
-        &mint,
-        &bonding_curve,
-        &associated_bonding_curve,
-        &buyer_token_account,
-        min_tokens_out,  // Amount of tokens we want (with slippage)
-        amount_lamports, // Max SOL we're willing to pay
+    // Derive PDAs and required accounts per IDL
+    let pump_program = Pubkey::from_str(PUMP_PROGRAM)?;
+    let system_program = Pubkey::from_str(SYSTEM_PROGRAM)?;
+    let token_program = Pubkey::from_str(TOKEN_PROGRAM)?;
+    let fee_program = Pubkey::from_str(FEE_PROGRAM)?;
+
+    // Global PDA
+    let (global_pda, _bump) = Pubkey::find_program_address(&[b"global"], &pump_program);
+    // Fetch global to read fee_recipient (Anchor: 8-byte discriminator + fields)
+    let global_acc = rpc_client.get_account(&global_pda)?;
+    let data = global_acc.data;
+    // Layout per IDL: bool initialized (1), authority pubkey (32), fee_recipient pubkey (32)
+    let fee_recipient_start = 8 + 1 + 32;
+    let fee_recipient_end = fee_recipient_start + 32;
+    let fee_recipient = Pubkey::new_from_array(
+        data[fee_recipient_start..fee_recipient_end]
+            .try_into()
+            .map_err(|_| "fee_recipient slice error")?,
     );
+
+    // Event authority PDA
+    let (event_authority, _) = Pubkey::find_program_address(&[b"__event_authority"], &pump_program);
+
+    // Creator vault PDA
+    let (creator_vault, _) =
+        Pubkey::find_program_address(&[b"creator-vault", &creator.to_bytes()], &pump_program);
+
+    // Global volume accumulator PDA
+    let (global_volume_accumulator, _) =
+        Pubkey::find_program_address(&[b"global_volume_accumulator"], &pump_program);
+
+    // User volume accumulator PDA
+    let (user_volume_accumulator, _) = Pubkey::find_program_address(
+        &[b"user_volume_accumulator", &buyer.to_bytes()],
+        &pump_program,
+    );
+
+    // Fee config PDA: seeds ["fee_config", CONST_32], program = fee_program
+    let fee_config_seed2: [u8; 32] = [
+        1, 86, 224, 246, 147, 102, 90, 207, 68, 219, 21, 104, 191, 23, 91, 170, 81, 137, 203, 151,
+        245, 210, 255, 59, 101, 93, 43, 182, 253, 109, 24, 176,
+    ];
+    let (fee_config, _) =
+        Pubkey::find_program_address(&[b"fee_config", &fee_config_seed2], &fee_program);
+
+    let accounts = BuyAccounts {
+        mint,
+        bonding_curve,
+        associated_bonding_curve,
+        associated_user: buyer_token_account,
+        user: buyer,
+        system_program,
+        token_program,
+        creator_vault,
+        event_authority,
+        global_volume_accumulator,
+        user_volume_accumulator,
+        fee_config,
+        fee_program,
+        fee_recipient,
+    };
+
+    // Add the buy instruction matching IDL order
+    let buy_ix = build_buy_instruction(&accounts, min_tokens_out, amount_lamports);
     instructions.push(buy_ix);
 
     // Get recent blockhash

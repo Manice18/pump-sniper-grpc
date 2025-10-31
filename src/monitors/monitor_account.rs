@@ -206,6 +206,7 @@ fn handle_account_update(
                             mint: token.mint.clone(),
                             bonding_curve: token.bonding_curve.clone(),
                             associated_bonding_curve: associated_bonding_curve.to_string(),
+                            creator: bs58::encode(curve.creator).into_string(),
                             amount_sol: config.buy_amount_lamports as f64 / 1_000_000_000.0,
                             slippage_bps: config.slippage_bps,
                             buyer_keypair: keypair,
